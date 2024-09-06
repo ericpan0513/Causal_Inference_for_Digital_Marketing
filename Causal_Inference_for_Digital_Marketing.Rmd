@@ -1,0 +1,100 @@
+---
+title: "Measuring ROI on Sponsored Search Ads"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+header-includes:
+  - \usepackage{setspace}\doublespacing
+date: "2023-11-11"
+---
+```{r message=FALSE, echo=FALSE, warning=FALSE}
+library(readxl)
+library(dplyr)
+library(plm)
+```
+# Business Overview
+Bazaar.com is a leading online retailer in the United States and it uses both display advertising and search engine advertisng on Google, Bing, Yahoo and Ask. Bazaar releases its ads in response to keywords of two categories: branded and nonbranded. Branded keywords include keywords such as "Bazaar", "Bazaar shows", and "Bazaar guiter" that contains brand name, while nonbranded keywords that do not contain "Bazaar".  
+Bob and Myra, who are senior members from marketing analytics team at Bazaar, are interested into ROI calculations on the sponsored search ads and computed a 320% ROI. However, the result is skeptical because people who search with teh word "Bazaar" have already had the intent to vist Bazaar's website. In this report, our goal is to understand the causal effect of the ads, and the following part will be addressed:  
+(a)	What is Wrong with Bob’s RoI Calculation?  
+(b)	Define the Treatment and Control.  
+(c)	Consider a First Difference Estimate.  
+(d) Calculate the Difference-in-Differences.  
+(e) Fixed RoI Calculation.
+
+# Data Overview
+The dataset used in this analysis is the weekly average traffic data on four different platforms for 12 weeks. After importing the data, we created three new variables, which are "treat"(differentiate test and control group), "after"(indicate the period after treatment) and "total_traffic"(represent the total of sponsored and organic traffic)
+```{r message=FALSE}
+data <- read.csv("G:/My Drive/2023Fall/CI/did_sponsored_ads.csv")
+data = data %>% mutate(treat = ifelse(platform == 'goog',1 ,0),
+                       after = ifelse(week >= 10, 1, 0),
+                       total_traffic = avg_spons + avg_org)
+```
+
+#	What is Wrong with Bob’s RoI Calculation?
+In Bob's calculation, he didn't consider that among all the customers who click on the sponsored ads, only part of them clicked only because of the ads. Other customers may already knew about the company and are planning to visit the website even if they didn't see the ads. As a results, these traffic should not be consider the revenue that is contributed by sponsored ads and ROI calculation needed to be adjusted.
+
+# Define Treatment vs. Control Group
+Treatment is defined as the stop of sponsored search ads on Google after week 10. Treatment group in the experiment is Google, while control group contains Bing, Yahoo and Ask.
+
+# First Difference Estimate
+```{r}
+data_google = data %>% filter(platform == 'goog')
+
+model_1 = lm(log(1 + total_traffic) ~ after, data=data_google)
+summary(model_1)
+```
+```{r}
+simple_fd = plm(total_traffic ~ after, data=data_google,
+                model = "fd",
+                effect = "individual",
+                index = "id")
+summary(simple_fd)
+```
+
+If we look at the coefficients of "after", it shows that there's around 0.12% decline in weekly total traffic to the website. However, the p-value equals 0.998, which means we cannot conclude that there are statiscal differences with and without sponsored ads.  
+And also, using this method is not accurate, because we assume that the traffic will not change due to outside effects and just simply compare between before and after treatment period, which may be inaccurate.   
+To fix this, we use Difference in Differences to analyze.
+
+# Calculate the Difference-in-Differences
+Before calculating the difference in difference estimate of the treatment effect, we check the if the assumption of parallel trends hold. 
+```{r}
+dyn = plm(log(1+total_traffic) ~ treat * factor(week), data=data,
+          model="within",
+          effect='twoways',
+          index=c("platform","week"))
+summary(dyn)
+```
+hold
+```{r}
+model_pt = lm(total_traffic ~ treat * factor(week), data=data)
+summary(model_pt)
+```
+  From the result, we can see that the assumption of parallel trends does not hold.  
+We still use Difference in Differences regression between treatment and control groups to analyze the causality of the sponsored ads.  
+```{r}
+model_did = plm(total_traffic ~ treat * after, data=data,
+             model="within", effect = "twoways", index=c("id", "week"))
+summary(model_did)
+```
+  From the coefficient above, we know that Bazaar loses 9910 clicks per week without the sponsored ads on Google.
+
+# Fixed RoI Calculation.
+Originally, according to Bob's calculation:  
+Average cost per click for a sponsored click is $0.60.Once consumers land on Bazaar.com, their average probability of making a purchase from website is 12% and average margin per conversion $21, leads to an average revenue per click = 0.12 * $21 = $2.52.  
+This implies an ROI of (2.52 - 0.60)/0.60 = 320%  
+Now, if we want to compute the correct ROI, we'll need to consider the proportion of whose clicks were driven by ads. To understand this, we want to determine the impact of the absence of Google on average organic.
+```{r}
+model_org = plm(avg_org ~ treat * after, data=data,
+            model="within", effect = "twoways", index=c("id", "week"))
+summary(model_org)
+```
+If we look at the coefficients, it means that 2293 clicks were using organic search results to visit the website.  
+After knowing this, we can recalculate the ROI again, which should be:  
+`Proportion of true traffic = 9910 / (9910 + 2293) = 0.812 = 81.2%`  
+So the adjusted ROI should be:  
+`(21 * 0.12 * 0.812 - 0.60) / 0.60 = 2.41 = 241%`
+```{r}
+(21 * 0.12 * 0.812 - 0.60) / 0.60
+```
+The fixed calculation of the ROI is 241%, showing some decrease after considering the new estimated treatment effect.
